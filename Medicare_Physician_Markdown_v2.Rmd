@@ -17,7 +17,7 @@ This report explores Medicare billing patterns among physicians practicing in Rh
 
 To ensure consistency and relevance, we restrict our analysis to physicians holding either a **Doctor of Medicine (MD)** or **Doctor of Osteopathic Medicine (DO)** degree, and whose practice location is within Rhode Island or New Hampshire. This allows for meaningful comparisons across states, specialties, and years.
 
-The key objectives of this exercise are to:
+**Key objectives:**
 
 -   Summarize and compare **total submitted charges** and **total allowed charges** across the two states and years
 
@@ -312,7 +312,7 @@ There was no statistically significant linear trend in total allowed charges ove
 
 The model explains approximately 19% of the variation in total allowed charges (Adjusted R² = 0.1865). This indicates that while the included variables contribute meaningfully, a large portion of the variation remains unexplained, suggesting the presence of other influential factors not captured in the model.
 
-### **3. Based on the regression above, Specialty with the highest allowed charges (controlling for state and year)?**
+### **3. Specialty with the highest allowed charges (controlling for state and year)**
 
 ```{r}
 
@@ -368,6 +368,18 @@ print(paste("Correlation (r) =", round(correlation_result, 3)))
 ![[*https://financetrainingcourse.com/education/2011/04/correlation-correlation-coefficient-r/*](https://financetrainingcourse.com/education/2011/04/correlation-correlation-coefficient-r/){.uri}](download.jpeg){width="227"}
 
 **Moderately strong positive correlation (r=0.659):** Physicians who submitted higher charges in 2022 tend to have higher allowed charges in 2023, suggesting consistent billing patterns across years.
+
+### **Conclusion**
+
+This analysis highlights important differences in Medicare physician billing patterns between Rhode Island and New Hampshire during 2022 and 2023. Physicians in New Hampshire consistently submitted higher charges than those in Rhode Island. However, the differences in allowed charges were relatively modest, suggesting that higher submissions do not necessarily result in proportionally higher reimbursements.
+
+Physician specialty was a strong predictor of allowed charges. Micrographic Dermatologic Surgery had the highest average allowed charges when controlling for state and year. The regression results showed that Rhode Island physicians received significantly lower allowed charges on average compared to their New Hampshire counterparts.
+
+No significant change in allowed charges was observed across the two years, indicating that Medicare payment levels remained stable during this period. Additionally, the moderately strong correlation between 2022 submitted charges and 2023 allowed charges suggests that physicians tend to maintain consistent billing patterns over time.
+
+### **Final Remarks**
+
+These findings offer insight into how physician location and specialty influence Medicare reimbursements. They can support efforts by policymakers, insurers, and healthcare administrators to better understand and address billing variation and promote equitable payment practices. Further analysis incorporating additional variables such as patient demographics, provider group size, and regional cost indices could help explain more of the variation in physician payments and inform future reforms.
 
 ------------------------------------------------------------------------
 
