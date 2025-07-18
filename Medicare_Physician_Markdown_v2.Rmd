@@ -1,0 +1,390 @@
+---
+title: "Medicare Physician Billing Patterns in RI and NH: A Comparative Analysis (2022–2023)"
+author: "Shan Aziz"
+date: "2025-06-31"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**Introduction**
+
+This report explores Medicare billing patterns among physicians practicing in Rhode Island (RI) and New Hampshire (NH) using the Medicare Physician & Other Practitioners by Provider dataset from the Centers for Medicare & Medicaid Services (CMS). We focus on providers with data available for both 2022 and 2023, allowing for a panel analysis at the provider-year level.
+
+To ensure consistency and relevance, we restrict our analysis to physicians holding either a **Doctor of Medicine (MD)** or **Doctor of Osteopathic Medicine (DO)** degree, and whose practice location is within Rhode Island or New Hampshire. This allows for meaningful comparisons across states, specialties, and years.
+
+The key objectives of this exercise are to:
+
+-   Summarize and compare **total submitted charges** and **total allowed charges** across the two states and years
+
+-   Identify the **three most common physician specialties** and their distribution within each state
+
+-   Estimate a **linear regression model** to test whether physicians in New Hampshire differ significantly in allowed charges compared to those in Rhode Island, controlling for specialty and year
+
+-   Calculate the **correlation** between submitted charges in 2022 and allowed charges in 2023 to assess year-to-year billing consistency
+
+The goal of this study is to uncover state-level and specialty-level patterns in Medicare billing and evaluate the stability of physician payment behavior across years.
+
+```{r, message=FALSE, warning = FALSE}
+# Loading libraries
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(knitr)
+library(tidyr)
+library(patchwork)
+library(scales)
+library(stringr)
+library(broom)
+```
+
+# Preliminary set up
+
+##### Data source: [https://data.cms.gov/provider-summary-by-type-of-service/medicare-physician-other-practitioners/medicare-physician-other-practitioners-by-provider](https://data.cms.gov/provider-summary-by-type-of-service/medicare-physician-other-practitioners/medicare-physician-other-practitioners-by-provider){.uri style="color:blue;"}
+
+```{r, message=FALSE}
+# Loading both datasets
+df_2022 <- read_csv("Medicare_Physician_Other_Practitioners_by_Provider_2022.csv")
+df_2023 <- read_csv("Medicare_Physician_Other_Practitioners_by_Provider_2023.csv")
+
+# Add year variable to each dataset before combining
+df_2022$year <- 2022
+df_2023$year <- 2023
+
+# Combine both years into a single data frame
+combined_df <- rbind(df_2022, df_2023)
+
+
+```
+
+### The unit of observation should be provider-year, with two observations per provider (2022 and 2023)
+
+```{r}
+
+# Get detailed breakdown of provider appearances
+provider_counts <- table(combined_df$Rndrng_NPI)
+provider_counts_df <- data.frame(
+  Rndrng_NPI = names(provider_counts),
+  count = as.numeric(provider_counts)
+)
+
+# See the distribution
+table(provider_counts_df$count)
+
+# Find providers in both years (balanced panel)
+balanced_providers <- provider_counts_df$Rndrng_NPI[provider_counts_df$count == 2]
+cat("Balanced panel providers:", length(balanced_providers), "\n")
+
+# Find providers in only one year
+single_year_providers <- provider_counts_df$Rndrng_NPI[provider_counts_df$count == 1]
+cat("Single-year providers:", length(single_year_providers), "\n")
+
+# Keep only providers appearing in both years
+balanced_df <- combined_df[combined_df$Rndrng_NPI %in% balanced_providers, ]
+
+# Verify: should have exactly 2 observations per provider
+table(table(balanced_df$Rndrng_NPI))
+
+```
+
+### Filter for MD or DO and state is RI or NH
+
+```{r}
+
+# Advance cleaning step because of inconsistant MD and Do 
+
+md_do_df <- balanced_df %>%
+  filter(
+    Rndrng_Prvdr_Crdntls %>%
+      str_replace_all("M[,\\s]?D", "MD") %>%       # fix "M,D", "M D", etc.
+      str_replace_all("D[,\\s]?O", "DO") %>%       # fix "D,O", "D O", etc.
+      str_to_upper() %>%                           #uppercase
+      str_replace_all("\\.", "") %>%               #Removes all periods
+      str_replace_all("\\s+", " ") %>%             #Replaces multiple spaces with a single space
+      str_trim() %>%                               #Removes leading and trailing spaces
+      str_detect("\\bMD\\b")                       #\\b = word boundary in regex
+  )
+
+filtered_df <- md_do_df %>%
+  filter(Rndrng_Prvdr_State_Abrvtn %in% c("RI", "NH"))
+
+```
+
+### **1. A short table of summary statistics comparing the Medicare billings of Rhode Island and New Hampshire physicians. Comparing the annual mean and standard deviation of total submitted charges and total allowed charges treated by physician state.**
+
+```{r,message=FALSE}
+
+
+# Summary Statistics
+summary_stats <- filtered_df %>%
+  group_by(State = Rndrng_Prvdr_State_Abrvtn, Year=year) %>%
+  summarise(
+    `Avg Submitted Charges` = mean(Tot_Sbmtd_Chrg, na.rm = TRUE),
+    `SD Submitted Charges` = sd(Tot_Sbmtd_Chrg, na.rm = TRUE),
+    `Avg Allowed Charges` = mean(Tot_Mdcr_Alowd_Amt, na.rm = TRUE),
+    `SD Allowed Charges` = sd(Tot_Mdcr_Alowd_Amt, na.rm = TRUE),
+  )
+
+# Now I need to reshape this data to make a comparison chart
+# Want to plot submitted vs allowed side by side
+plot_data <- summary_stats %>%
+  select(State, Year, `Avg Submitted Charges`, `Avg Allowed Charges`) %>%
+  pivot_longer(cols = c(`Avg Submitted Charges`, `Avg Allowed Charges`),
+               names_to = "Charge_Type", 
+               values_to = "Amount")
+
+# Reshape SDs
+sd_data <- summary_stats %>%
+  select(State, Year, `SD Submitted Charges`, `SD Allowed Charges`) %>%
+  pivot_longer(cols = c(`SD Submitted Charges`, `SD Allowed Charges`),
+               names_to = "Charge_Type", 
+               values_to = "SD") %>%
+  mutate(Charge_Type = gsub("SD", "Avg", Charge_Type))  # Match names to join
+
+# Join average and SD data
+plot_data <- left_join(plot_data, sd_data,
+                       by = c("State", "Year", "Charge_Type"))
+
+# Create a combined label for the x-axis to show state and year together
+plot_data$State_Year <- paste(plot_data$State, plot_data$Year)
+
+# Make the comparison chart
+chart <- ggplot(plot_data, aes(x = State_Year, y = Amount, fill = Charge_Type)) +
+  geom_col(position = position_dodge(0.9), width = 0.7) +
+  geom_errorbar(aes(ymin = Amount - SD, ymax = Amount + SD),
+                position = position_dodge(0.9),
+                width = 0.2, color = "black") +
+  scale_fill_manual(values = c("Avg Submitted Charges" = "steelblue", 
+                               "Avg Allowed Charges" = "green3")) +
+  scale_y_continuous(labels = dollar_format()) +
+  labs(title = "Healthcare Charges: Submitted vs Allowed",
+       x = "State and Year",
+       y = "Average Charges ($)",
+       fill = "Charge Type") +
+  theme_light()
+
+# Show the chart
+print(chart)
+
+# Also show the detailed numbers in a table
+kable(summary_stats, caption = "Summary Statistics by State and Year")
+
+
+```
+
+### Key Insights:
+
+-   NH physicians submitted 50–70% more than RI physicians in both 2022 and 2023.
+
+-   Despite higher submissions, allowed charges only showed a 2.4% decrease in NH and 0.44% increase in RI from 2022 to 2023
+
+-   NH showed larger standard deviations, indicating more variation in physician billing behavior.
+
+### **Three most common specialties in this data and reporting the proportion of doctors with these specializations within each state.**
+
+```{r, message=FALSE}
+
+# Find the top 3 most common medical specialties in overall data
+top_specialties <- filtered_df %>%
+  count(Rndrng_Prvdr_Type) %>%
+  arrange(desc(n)) %>%
+  head(3)
+
+# Extract just the specialty names for filtering
+top_3_names <- top_specialties$Rndrng_Prvdr_Type
+
+# Filter my data to only include these top 3 specialties
+data_top3 <- filtered_df %>%
+  filter(Rndrng_Prvdr_Type %in% top_3_names)
+
+# Now calculate what percentage each specialty makes up within each state
+specialty_summary <- data_top3 %>%
+  group_by(State = Rndrng_Prvdr_State_Abrvtn, Specialty = Rndrng_Prvdr_Type) %>%
+  count() %>%
+  group_by(State) %>%
+  mutate(Percentage = round(n / sum(n) * 100, 1))
+
+# Show the detailed breakdown in a table
+kable(specialty_summary, caption = "Proportion of Top 3 Specialties by State")
+
+
+
+# Now lets visualize this with pie charts for each state
+# function to make consistent pie charts
+
+make_pie_chart <- function(state_data, state_name) {
+  ggplot(state_data, aes(x = "", y = Percentage, fill = Specialty)) +
+    geom_col(width = 1) +
+    coord_polar(theta = "y") +
+    geom_text(aes(label = paste0(Specialty, "\n", Percentage, "%")), 
+              position = position_stack(vjust = 0.7)) +
+    labs(title = paste("Top 3 Specialties in", state_name)) +
+    theme_void() +
+    theme(legend.position = "none")
+}
+
+# Get data for each state separately
+nh_data <- specialty_summary %>% filter(State == "NH")
+ri_data <- specialty_summary %>% filter(State == "RI")
+
+# pie charts for both states
+nh_pie <- make_pie_chart(nh_data, "New Hampshire")
+ri_pie <- make_pie_chart(ri_data, "Rhode Island")
+
+# both charts side by side for easy comparison (special thanks to patchwork lib)
+nh_pie + ri_pie
+```
+
+### **2. Regression that tests whether physicians who are in New Hampshire (vs. Rhode Island) have higher total allowed charges, controlling for provider type (i.e., specialty) and year.**
+
+```{r}
+
+# linear regression model
+reg_model <- lm(Tot_Mdcr_Alowd_Amt ~ Rndrng_Prvdr_State_Abrvtn + Rndrng_Prvdr_Type + year, data = filtered_df)
+
+# Tidy the model output
+tidy_output <- tidy(reg_model)
+
+# Accessing the 'term' column directly and use gsub for replacement
+# Remove "Rndrng_Prvdr_Type"
+tidy_output$term <- gsub("Rndrng_Prvdr_Type", "", tidy_output$term)
+
+# Remove "Rndrng_Prvdr_State_Abrvtn"
+tidy_output$term <- gsub("Rndrng_Prvdr_State_Abrvtn", "", tidy_output$term)
+
+#output
+kable(tidy_output,
+      digits = 4,
+      format = "latex",    # Explicitly set format for PDF output
+      longtable = TRUE)    # multi-page tables
+
+```
+
+\
+
+![[*https://itfeature.com/hypothesis/p-value-definition/*](https://itfeature.com/hypothesis/p-value-definition/)](values-of-p-Inference.jpg){width="345"}
+
+**Interpretation of results**
+
+We found a statistically significant difference in total allowed Medicare charges for physicians practicing in Rhode Island compared to the reference state. Specifically, Rhode Island providers had lower total allowed charges on average (Estimate = -19,083; p = 7.43e-08).
+
+**Specialty Effect**
+
+Several medical specialties were associated with significantly higher total allowed charges:
+
+-   Medical Oncology (p = 0.000215)
+
+-   Micrographic Dermatologic Surgery (p = 1.86e-07)
+
+-   Dermatology (p = 0.001848)
+
+-   Radiation Oncology (p = 0.005493)
+
+-   Hematology-Oncology (p = 0.010535)
+
+-   Interventional Pain Management (p = 0.022861)
+
+-   Rheumatology (p = 0.019466)
+
+Other specialties showed marginal significance (0.05 \< p \< 0.10), including:
+
+-   Cardiac Surgery (p = 0.0501)
+
+-   Hand Surgery (p = 0.0986)
+
+-   Nephrology (p = 0.0837)
+
+-   Orthopedic Surgery (p = 0.0869)
+
+-   Pain Management (p = 0.0705)
+
+These results suggest that specialty type is an important predictor of Medicare allowed charges.
+
+**Year Effect**
+
+There was no statistically significant linear trend in total allowed charges over time (p = 0.6401), indicating that Medicare payments did not meaningfully increase or decrease across the years analyzed.
+
+**Model Fit**
+
+The model explains approximately 19% of the variation in total allowed charges (Adjusted R² = 0.1865). This indicates that while the included variables contribute meaningfully, a large portion of the variation remains unexplained, suggesting the presence of other influential factors not captured in the model.
+
+### **3. Based on the regression above, Specialty with the highest allowed charges (controlling for state and year)?**
+
+```{r}
+
+# I want to find which medical specialty gets paid the most
+# plan: extract coefficients -> filter for specialties -> find the highest one
+
+# Get all coefficients from regression model
+model_results <- coef(reg_model)
+
+# I only care about specialty coefficients, not state/year effects
+# These all have "Rndrng_Prvdr_Type" in their names
+specialty_results <- model_results[grepl("Rndrng_Prvdr_Type", names(model_results))]
+
+# This line looks at the names of the 'specialty_results'
+# and replaces "Rndrng_Prvdr_Type" with an empty space ("").
+names(specialty_results) <- gsub("Rndrng_Prvdr_Type", "", names(specialty_results))
+
+# Sort them highest to lowest and grab the top one
+highest_allowed_charges <- sort(specialty_results, decreasing = TRUE) %>% head(1)
+
+# Printing highest allowed charges 
+print(highest_allowed_charges)
+
+```
+
+Micrographic Dermatologic Surgery had the highest average total allowed charges, with an estimated value of \$542,258.59
+
+### **4. Calculating the correlation between physicians’ total submitted charges in 2022 and total allowed charges in 2023.**
+
+```{r}
+# Create 2022 dataset with submitted charges
+charges_2022 <- filtered_df %>%
+  filter(year == 2022) %>%
+  select(Rndrng_NPI, Tot_Sbmtd_Chrg) %>%
+  rename(submitted_2022 = Tot_Sbmtd_Chrg)
+
+# Create 2023 dataset with allowed charges
+charges_2023 <- filtered_df %>%
+  filter(year == 2023) %>%
+  select(Rndrng_NPI, Tot_Mdcr_Alowd_Amt) %>%
+  rename(allowed_2023 = Tot_Mdcr_Alowd_Amt)
+
+# Only keep physicians who appear in both years for fair comparison
+cor_df <- inner_join(charges_2022, charges_2023, by = "Rndrng_NPI")
+
+# Calculate the correlation between 2022 submissions and 2023 allowances
+correlation_result <- cor(cor_df$submitted_2022, cor_df$allowed_2023, use = "complete.obs")
+
+# Show the result
+print(paste("Correlation (r) =", round(correlation_result, 3)))
+```
+
+![[*https://financetrainingcourse.com/education/2011/04/correlation-correlation-coefficient-r/*](https://financetrainingcourse.com/education/2011/04/correlation-correlation-coefficient-r/){.uri}](download.jpeg){width="227"}
+
+**Moderately strong positive correlation (r=0.659):** Physicians who submitted higher charges in 2022 tend to have higher allowed charges in 2023, suggesting consistent billing patterns across years.
+
+------------------------------------------------------------------------
+
+**Helpful Resources Links:**\
+[*https://stackoverflow.com/questions/61635604/r-pivot-longer-and-ggplot-errorbar-with-two-name-key-columns*](https://stackoverflow.com/questions/61635604/r-pivot-longer-and-ggplot-errorbar-with-two-name-key-columns){.uri}
+
+[*https://www.youtube.com/watch?v=Oe5O4LRj2rc&t=1972s*](https://www.youtube.com/watch?v=Oe5O4LRj2rc&t=1972s){.uri}*\
+<https://stackoverflow.com/questions/61635604/r-pivot-longer-and-ggplot-errorbar-with-two-name-key-columns>*
+
+[*https://www.geeksforgeeks.org/r-language/how-to-calculate-percentage-by-group-in-r/*](https://www.geeksforgeeks.org/r-language/how-to-calculate-percentage-by-group-in-r/){.uri}
+
+[*https://r-graph-gallery.com/414-map-multiple-charts-in-ggiraph.html*](https://r-graph-gallery.com/414-map-multiple-charts-in-ggiraph.html){.uri}
+
+[*https://www.sthda.com/english/articles/40-regression-analysis/163-regression-with-categorical-variables-dummy-coding-essentials-in-r/*](https://www.sthda.com/english/articles/40-regression-analysis/163-regression-with-categorical-variables-dummy-coding-essentials-in-r/){.uri}
+
+[*https://stackoverflow.com/questions/30159162/linear-model-with-categorical-variables-in-r*](https://stackoverflow.com/questions/30159162/linear-model-with-categorical-variables-in-r){.uri}
+
+[*https://www.statology.org/r-cor-function/*](https://www.statology.org/r-cor-function/){.uri}
+
+[*https://www.geeksforgeeks.org/r-language/compute-the-correlation-coefficient-value-between-two-vectors-in-r-programming-cor-function/*](https://www.geeksforgeeks.org/r-language/compute-the-correlation-coefficient-value-between-two-vectors-in-r-programming-cor-function/){.uri}
